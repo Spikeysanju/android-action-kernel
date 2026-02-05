@@ -6,11 +6,16 @@
 import {
   DEVICE_DUMP_PATH,
   LOCAL_DUMP_PATH,
+  DEVICE_SCREENSHOT_PATH,
+  LOCAL_SCREENSHOT_PATH,
   DEFAULT_MAX_STEPS,
   DEFAULT_STEP_DELAY,
   DEFAULT_GROQ_MODEL,
   DEFAULT_OPENAI_MODEL,
   DEFAULT_BEDROCK_MODEL,
+  DEFAULT_MAX_RETRIES,
+  DEFAULT_STUCK_THRESHOLD,
+  DEFAULT_VISION_ENABLED,
 } from "./constants.js";
 
 function env(key: string, fallback = ""): string {
@@ -22,10 +27,17 @@ export const Config = {
   ADB_PATH: env("ADB_PATH", "adb"),
   SCREEN_DUMP_PATH: DEVICE_DUMP_PATH,
   LOCAL_DUMP_PATH: LOCAL_DUMP_PATH,
+  DEVICE_SCREENSHOT_PATH: DEVICE_SCREENSHOT_PATH,
+  LOCAL_SCREENSHOT_PATH: LOCAL_SCREENSHOT_PATH,
 
   // Agent Configuration
   MAX_STEPS: parseInt(env("MAX_STEPS", String(DEFAULT_MAX_STEPS)), 10),
   STEP_DELAY: parseFloat(env("STEP_DELAY", String(DEFAULT_STEP_DELAY))),
+  MAX_RETRIES: parseInt(env("MAX_RETRIES", String(DEFAULT_MAX_RETRIES)), 10),
+  STUCK_THRESHOLD: parseInt(env("STUCK_THRESHOLD", String(DEFAULT_STUCK_THRESHOLD)), 10),
+
+  // Vision fallback (when accessibility tree is empty)
+  VISION_ENABLED: env("VISION_ENABLED", String(DEFAULT_VISION_ENABLED)) === "true",
 
   // LLM Provider: "groq", "openai", "bedrock", or "openrouter"
   LLM_PROVIDER: env("LLM_PROVIDER", "groq"),

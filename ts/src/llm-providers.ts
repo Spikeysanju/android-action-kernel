@@ -19,79 +19,106 @@ import {
 } from "./constants.js";
 import type { ActionDecision } from "./actions.js";
 
-// System prompt for the Android agent
-const SYSTEM_PROMPT = `
-You are an Android Driver Agent. Your job is to achieve the user's goal by navigating the UI.
+// ===========================================
+// System Prompt — all 15 actions + rich element context
+// ===========================================
+
+const SYSTEM_PROMPT = `You are an Android Driver Agent. Your job is to achieve the user's goal by navigating the Android UI.
 
 You will receive:
-1. The User's Goal.
-2. A list of interactive UI elements (JSON) with their (x,y) center coordinates.
-3. Your previous actions (so you don't repeat yourself).
+1. GOAL — the user's task.
+2. SCREEN_CONTEXT — JSON array of interactive UI elements with coordinates, states, and hierarchy.
+3. PREVIOUS_ACTIONS — your action history with outcomes (OK/FAILED).
+4. SCREEN_CHANGE — what changed since your last action (or if the screen is stuck).
+5. VISION_FALLBACK — present when the accessibility tree is empty (custom UI / WebView).
 
 You must output ONLY a valid JSON object with your next action.
 
-Available Actions:
-- {"action": "tap", "coordinates": [x, y], "reason": "Why you are tapping"}
-- {"action": "type", "text": "Hello World", "reason": "Why you are typing"}
-- {"action": "enter", "reason": "Press Enter to submit/search"}
-- {"action": "swipe", "direction": "up/down/left/right", "reason": "Why you are swiping"}
-- {"action": "home", "reason": "Go to home screen"}
-- {"action": "back", "reason": "Go back"}
-- {"action": "wait", "reason": "Wait for loading"}
-- {"action": "done", "reason": "Task complete"}
+═══════════════════════════════════════════
+AVAILABLE ACTIONS (15 total)
+═══════════════════════════════════════════
 
-IMPORTANT RULES:
-- If an element has "editable": true or "action": "type", use the "type" action to enter text.
-- After tapping on a text field, your NEXT action should be "type" to enter text.
-- After typing a URL or search query, use "enter" to submit it.
-- Do NOT type the same text again if you already typed it in a previous step. Check PREVIOUS_ACTIONS.
-- Do NOT tap the same element repeatedly. If you already tapped it, try a different action.
-- If the screen shows your typed text, do NOT type again - use "enter" or tap a search result.
-- If you need to find an app that's not on the home screen, swipe UP to open the app drawer.
-- Use swipe to scroll through lists, pages, or to open the app drawer.
+Navigation:
+  {"action": "tap", "coordinates": [x, y], "reason": "..."}
+  {"action": "longpress", "coordinates": [x, y], "reason": "..."}
+  {"action": "swipe", "direction": "up|down|left|right", "reason": "..."}
+  {"action": "enter", "reason": "Press Enter/submit"}
+  {"action": "back", "reason": "Navigate back"}
+  {"action": "home", "reason": "Go to home screen"}
 
-Example - Tapping a button:
-{"action": "tap", "coordinates": [540, 1200], "reason": "Clicking the 'Connect' button"}
+Text Input:
+  {"action": "type", "text": "Hello World", "reason": "..."}
+  {"action": "clear", "reason": "Clear current text field before typing"}
 
-Example - Typing in a search box:
-{"action": "type", "text": "White House", "reason": "Entering search query"}
+App Control:
+  {"action": "launch", "package": "com.whatsapp", "reason": "Open WhatsApp"}
+  {"action": "launch", "uri": "https://maps.google.com/?q=pizza", "reason": "Open URL"}
+  {"action": "launch", "package": "com.whatsapp", "uri": "content://media/external/images/1", "extras": {"android.intent.extra.TEXT": "Check this"}, "reason": "Share image to WhatsApp"}
 
-Example - After typing a URL:
-{"action": "enter", "reason": "Submitting the URL to navigate"}
+Data:
+  {"action": "screenshot", "reason": "Capture current screen"}
+  {"action": "screenshot", "filename": "order_confirmation.png", "reason": "Save proof"}
+  {"action": "clipboard_get", "reason": "Read clipboard contents"}
+  {"action": "clipboard_set", "text": "copied text", "reason": "Set clipboard"}
 
-Example - Opening app drawer to find an app:
-{"action": "swipe", "direction": "up", "reason": "Opening app drawer to find Maps"}
-`;
+System:
+  {"action": "shell", "command": "am force-stop com.app.broken", "reason": "Kill crashed app"}
+  {"action": "wait", "reason": "Wait for screen to load"}
+  {"action": "done", "reason": "Task is complete"}
+
+═══════════════════════════════════════════
+ELEMENT PROPERTIES YOU WILL SEE
+═══════════════════════════════════════════
+
+Each element in SCREEN_CONTEXT has:
+- text: visible label or content description
+- center: [x, y] coordinates to tap
+- size: [width, height] in pixels
+- enabled: whether the element can be interacted with (DO NOT tap disabled elements!)
+- checked: checkbox/toggle state (true = ON)
+- focused: whether this field currently has input focus
+- selected: whether this item is currently selected (tabs, list items)
+- scrollable: whether this container can be scrolled
+- longClickable: supports long-press for context menu
+- editable: text input field
+- password: password input (don't read/log the text)
+- hint: placeholder text shown when field is empty
+- parent: the containing element (helps understand layout hierarchy)
+- action: suggested action — "tap", "type", "longpress", "scroll", or "read"
+
+═══════════════════════════════════════════
+CRITICAL RULES
+═══════════════════════════════════════════
+
+1. DISABLED ELEMENTS: If "enabled": false, DO NOT tap or interact with it. Find an alternative.
+2. TEXT INPUT: If "editable": true, use "clear" first if field has existing text, then "type".
+3. ALREADY TYPED: Check PREVIOUS_ACTIONS. Do NOT re-type text you already entered.
+4. REPETITION: Do NOT tap the same coordinates twice in a row. If it didn't work, try something else.
+5. STUCK: If SCREEN_CHANGE says "NOT changed", your last action had no effect. Change strategy.
+6. APP LAUNCH: Use "launch" to directly open apps instead of hunting for icons on the home screen.
+7. SCREENSHOTS: Use "screenshot" to capture proof of completed tasks (order confirmations, etc).
+8. LONG PRESS: Use "longpress" when you see "longClickable": true (context menus, copy/paste, etc).
+9. SCROLLING: If the item you need isn't visible, "swipe" up/down to scroll and find it.
+10. MULTI-APP: To switch apps, use "home" then "launch" the next app. Or use "back" to return.
+11. PASSWORDS: Never log or output the text of password fields.
+12. DONE: Say "done" as soon as the goal is achieved. Don't keep acting after success.
+13. SEARCH: After typing in a search field, use "enter" to submit the search.
+14. SHARE: To send files/images between apps, use "launch" with uri + extras for Android intents.
+15. CLEANUP: If a popup/ad appears, dismiss it with "back" or tap the close button, then continue.`;
+
+// ===========================================
+// Provider Interface
+// ===========================================
 
 interface ActionHistoryEntry {
   action?: string;
   reason?: string;
   text?: string;
   coordinates?: [number, number];
+  package?: string;
+  uri?: string;
 }
 
-function formatActionHistory(actionHistory: ActionHistoryEntry[]): string {
-  if (actionHistory.length === 0) return "";
-
-  const lines = actionHistory.map((entry, i) => {
-    const actionType = entry.action ?? "unknown";
-    const reason = entry.reason ?? "N/A";
-
-    if (actionType === "type") {
-      return `Step ${i + 1}: typed "${entry.text ?? ""}" - ${reason}`;
-    }
-    if (actionType === "tap") {
-      return `Step ${i + 1}: tapped ${JSON.stringify(entry.coordinates ?? [])} - ${reason}`;
-    }
-    return `Step ${i + 1}: ${actionType} - ${reason}`;
-  });
-
-  return "\n\nPREVIOUS_ACTIONS:\n" + lines.join("\n");
-}
-
-/**
- * Abstract interface for LLM providers.
- */
 export interface LLMProvider {
   getDecision(
     goal: string,
@@ -100,9 +127,10 @@ export interface LLMProvider {
   ): Promise<ActionDecision>;
 }
 
-/**
- * OpenAI and Groq provider (OpenAI-compatible API).
- */
+// ===========================================
+// OpenAI / Groq Provider
+// ===========================================
+
 class OpenAIProvider implements LLMProvider {
   private client: OpenAI;
   private model: string;
@@ -123,10 +151,10 @@ class OpenAIProvider implements LLMProvider {
   async getDecision(
     goal: string,
     screenContext: string,
-    actionHistory: ActionHistoryEntry[]
+    _actionHistory: ActionHistoryEntry[]
   ): Promise<ActionDecision> {
-    const historyStr = formatActionHistory(actionHistory);
-    const userContent = `GOAL: ${goal}\n\nSCREEN_CONTEXT:\n${screenContext}${historyStr}`;
+    // screenContext now includes history, diff, and vision context from kernel
+    const userContent = `GOAL: ${goal}\n\nSCREEN_CONTEXT:\n${screenContext}`;
 
     const response = await this.client.chat.completions.create({
       model: this.model,
@@ -141,10 +169,10 @@ class OpenAIProvider implements LLMProvider {
   }
 }
 
-/**
- * OpenRouter provider using Vercel AI SDK.
- * Access 200+ models (Claude, GPT-4, Llama, Gemini, Mistral, etc.) through a single API.
- */
+// ===========================================
+// OpenRouter Provider (Vercel AI SDK)
+// ===========================================
+
 class OpenRouterProvider implements LLMProvider {
   private openrouter: ReturnType<typeof createOpenRouter>;
   private model: string;
@@ -159,10 +187,9 @@ class OpenRouterProvider implements LLMProvider {
   async getDecision(
     goal: string,
     screenContext: string,
-    actionHistory: ActionHistoryEntry[]
+    _actionHistory: ActionHistoryEntry[]
   ): Promise<ActionDecision> {
-    const historyStr = formatActionHistory(actionHistory);
-    const userContent = `GOAL: ${goal}\n\nSCREEN_CONTEXT:\n${screenContext}${historyStr}`;
+    const userContent = `GOAL: ${goal}\n\nSCREEN_CONTEXT:\n${screenContext}`;
 
     const result = await generateText({
       model: this.openrouter.chat(this.model),
@@ -170,26 +197,14 @@ class OpenRouterProvider implements LLMProvider {
       prompt: userContent + "\n\nRespond with ONLY a valid JSON object.",
     });
 
-    return this.parseJsonResponse(result.text);
-  }
-
-  private parseJsonResponse(text: string): ActionDecision {
-    try {
-      return JSON.parse(text);
-    } catch {
-      const match = text.match(/\{[^{}]*\}/);
-      if (match) {
-        return JSON.parse(match[0]);
-      }
-      console.log(`Warning: Could not parse LLM response: ${text.slice(0, 200)}`);
-      return { action: "wait", reason: "Failed to parse response, waiting" };
-    }
+    return parseJsonResponse(result.text);
   }
 }
 
-/**
- * AWS Bedrock provider.
- */
+// ===========================================
+// AWS Bedrock Provider
+// ===========================================
+
 class BedrockProvider implements LLMProvider {
   private client: BedrockRuntimeClient;
   private model: string;
@@ -202,11 +217,9 @@ class BedrockProvider implements LLMProvider {
   async getDecision(
     goal: string,
     screenContext: string,
-    actionHistory: ActionHistoryEntry[]
+    _actionHistory: ActionHistoryEntry[]
   ): Promise<ActionDecision> {
-    const historyStr = formatActionHistory(actionHistory);
-    const userContent = `GOAL: ${goal}\n\nSCREEN_CONTEXT:\n${screenContext}${historyStr}`;
-
+    const userContent = `GOAL: ${goal}\n\nSCREEN_CONTEXT:\n${screenContext}`;
     const requestBody = this.buildRequest(userContent);
 
     const command = new InvokeModelCommand({
@@ -220,7 +233,7 @@ class BedrockProvider implements LLMProvider {
     const responseBody = JSON.parse(new TextDecoder().decode(response.body));
     const resultText = this.extractResponse(responseBody);
 
-    return this.parseJsonResponse(resultText);
+    return parseJsonResponse(resultText);
   }
 
   private isAnthropicModel(): boolean {
@@ -275,24 +288,34 @@ class BedrockProvider implements LLMProvider {
     }
     return responseBody.results[0].outputText;
   }
+}
 
-  private parseJsonResponse(text: string): ActionDecision {
-    try {
-      return JSON.parse(text);
-    } catch {
-      const match = text.match(/\{[^{}]*\}/);
-      if (match) {
+// ===========================================
+// Shared JSON Parsing
+// ===========================================
+
+function parseJsonResponse(text: string): ActionDecision {
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Try to extract JSON from markdown code blocks or mixed text
+    const match = text.match(/\{[\s\S]*?\}/);
+    if (match) {
+      try {
         return JSON.parse(match[0]);
+      } catch {
+        // fall through
       }
-      console.log(`Warning: Could not parse LLM response: ${text.slice(0, 200)}`);
-      return { action: "wait", reason: "Failed to parse response, waiting" };
     }
+    console.log(`Warning: Could not parse LLM response: ${text.slice(0, 200)}`);
+    return { action: "wait", reason: "Failed to parse response, waiting" };
   }
 }
 
-/**
- * Factory function to get the appropriate LLM provider.
- */
+// ===========================================
+// Factory
+// ===========================================
+
 export function getLlmProvider(): LLMProvider {
   if (Config.LLM_PROVIDER === "bedrock") {
     return new BedrockProvider();
